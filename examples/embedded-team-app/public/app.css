@@ -1,0 +1,287 @@
+/* Plain, local, and small on purpose: the lesson here is the handshake, not
+   the styling. Served from this app's own origin so the page needs no
+   'unsafe-inline' in style-src. */
+
+:root {
+  color-scheme: light dark;
+  --ink: #16181d;
+  --muted: #5c6270;
+  --line: #d8dbe2;
+  --ground: #ffffff;
+  --alert: #8c1d18;
+  --radius: 6px;
+}
+
+/* The workspace's mode wins over the OS preference. Inside a frame,
+   prefers-color-scheme follows the OPERATING SYSTEM, not the workspace around
+   the frame, so a light workspace framed a dark app. The server renders the
+   mode from `?theme=` into <html data-theme> for the first paint, and app.mjs
+   applies the workspace's `xray:embed:theme` message on top (its colours are
+   set as custom properties through the CSSOM, which this page's
+   `style-src 'self'` allows). The OS preference is only the fallback for a
+   page opened outside a workspace. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ink: #e9ebf0;
+    --muted: #a0a6b4;
+    --line: #363a45;
+    --ground: #16181d;
+    --alert: #f2b8b5;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ink: #e9ebf0;
+  --muted: #a0a6b4;
+  --line: #363a45;
+  --ground: #16181d;
+  --alert: #f2b8b5;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font:
+    15px/1.5 system-ui,
+    -apple-system,
+    Segoe UI,
+    sans-serif;
+}
+
+/* The workspace's gutters: the content starts directly under the
+   workspace's page header above the frame — 16px on a phone, 24px from
+   640px, 32px from 768px — with no top padding of its own (the header above
+   the frame leaves the gap). Left-aligned, so it lines up with that header. */
+main {
+  max-width: 44rem;
+  margin: 0;
+  padding: 0 1rem 3rem;
+}
+
+@media (min-width: 640px) {
+  main {
+    padding-inline: 1.5rem;
+  }
+}
+
+@media (min-width: 768px) {
+  main {
+    padding-inline: 2rem;
+  }
+}
+
+/* A heading for assistive tech only: the workspace shows the page's title. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+h1 {
+  font-size: 1.35rem;
+  margin: 0 0 0.25rem;
+}
+
+h2 {
+  font-size: 1rem;
+  margin: 1.75rem 0 0.5rem;
+}
+
+#status {
+  color: var(--muted);
+  margin: 0;
+}
+
+#alert {
+  margin: 1rem 0;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--alert);
+  border-radius: var(--radius);
+  color: var(--alert);
+}
+
+form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: end;
+}
+
+label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+
+input[type="text"] {
+  flex: 1 1 16rem;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--ground);
+  color: inherit;
+  font: inherit;
+}
+
+button {
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--ground);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--ink);
+}
+
+:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+li span:first-child {
+  flex: 1 1 auto;
+}
+
+.byline {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.dept-tag {
+  color: var(--muted);
+  font-size: 0.75rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  background: var(--line);
+  margin-left: 0.4rem;
+}
+
+details {
+  margin-top: 2rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+summary {
+  cursor: pointer;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* The one scan (the workspace's motion language): every
+   reveal is one line rising from the bottom edge, the workspace's Products
+   tray motion, and closing sinks it back down. Copy the keyframes unchanged
+   so a framed app moves exactly like the workspace around it. Here the
+   signed-in panel rises in once the handshake lands, its line riding the
+   rising edge. */
+#signed-in:not([hidden]) {
+  position: relative;
+  animation: xm-rise-open 560ms cubic-bezier(0.45, 0, 0.2, 1) both;
+}
+
+#signed-in:not([hidden])::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  height: 64px;
+  pointer-events: none;
+  z-index: 2;
+  border-top: 2px solid #1566b9;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(21, 102, 185, 0.22) 0px,
+    rgba(21, 102, 185, 0.22) 1px,
+    rgba(21, 102, 185, 0) 1px,
+    rgba(21, 102, 185, 0) 4px
+  );
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0) 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0) 100%);
+  animation:
+    xm-rise-beam-open 560ms cubic-bezier(0.45, 0, 0.2, 1) both,
+    xm-line-burn 560ms linear both;
+}
+
+@keyframes xm-rise-open {
+  from {
+    clip-path: inset(100% 0 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@keyframes xm-rise-beam-open {
+  from {
+    top: 100%;
+  }
+  to {
+    top: 0%;
+  }
+}
+
+/* The line ignites, holds through the rise and burns off at the top. */
+@keyframes xm-line-burn {
+  0% {
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  72% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #signed-in:not([hidden]),
+  #signed-in:not([hidden])::before {
+    animation: none;
+  }
+  #signed-in:not([hidden])::before {
+    content: none;
+  }
+}
+
+/* The note the workspace's search opened this page at (`?note=`). */
+li.is-linked {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+  border-radius: 6px;
+}

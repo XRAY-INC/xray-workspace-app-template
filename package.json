@@ -1,0 +1,35 @@
+{
+  "name": "xray-workspace-app-template",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Runnable reference apps for building on XRAY Workspace: a framed (embedded) app and a server-driven UI app, with identity, tenancy and certification done right.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "start:embedded": "node --env-file=examples/embedded-team-app/.env examples/embedded-team-app/server.mjs",
+    "start:sdui": "node examples/sdui-todo/server.mjs",
+    "test": "npm run test:embedded && npm run test:sdui",
+    "test:embedded": "node --test examples/embedded-team-app/server.test.mjs examples/embedded-team-app/security.test.mjs examples/embedded-team-app/contract.test.mjs",
+    "test:sdui": "node --test examples/sdui-todo/server.test.mjs && node --import tsx --test examples/sdui-todo/todo-contract.test.ts",
+    "test:browser": "node --test examples/embedded-team-app/browser.test.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "check": "npm run typecheck && npm test && npm run test:browser"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "ajv": "^8.20.0",
+    "lucide-react": "^1.59.0",
+    "react": "^19.3.1",
+    "recharts": "^3.10.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}

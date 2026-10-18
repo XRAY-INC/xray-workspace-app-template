@@ -1,0 +1,216 @@
+{
+  "$comment": "The schema XRAY Workspace validates GET /api/v1/manifest against at registration. Generated from the Workspace's serviceManifestSchema; refinements that JSON Schema cannot express (recordPathTemplate must contain {id}; service must equal your registered slug) are still enforced at registration.",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "service": {
+      "type": "string",
+      "pattern": "^[a-z0-9]{3,32}$"
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 80
+    },
+    "contractVersion": {
+      "type": "string",
+      "const": "v1"
+    },
+    "tagline": {
+      "type": "string",
+      "maxLength": 160
+    },
+    "icon": {
+      "type": "string",
+      "enum": [
+        "ship",
+        "anchor",
+        "container",
+        "boxes",
+        "package",
+        "truck",
+        "plane",
+        "warehouse",
+        "globe",
+        "map",
+        "file-text",
+        "clipboard-list",
+        "bar-chart-3",
+        "receipt",
+        "users",
+        "calendar",
+        "bell",
+        "mail",
+        "message-square",
+        "shield-check"
+      ]
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "requiredTier": {
+      "default": "free",
+      "type": "string",
+      "enum": [
+        "free",
+        "hourly",
+        "monthly"
+      ]
+    },
+    "capabilities": {
+      "default": {
+        "pages": false,
+        "events": false,
+        "search": false
+      },
+      "type": "object",
+      "properties": {
+        "pages": {
+          "default": false,
+          "type": "boolean"
+        },
+        "events": {
+          "default": false,
+          "type": "boolean"
+        },
+        "ai": {
+          "type": "object",
+          "properties": {
+            "paths": {
+              "default": [],
+              "maxItems": 20,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            }
+          }
+        },
+        "embed": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "maxLength": 200,
+              "pattern": "^\\/.*"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        },
+        "search": {
+          "default": false,
+          "type": "boolean"
+        }
+      }
+    },
+    "requestedGrants": {
+      "default": {
+        "identity": {
+          "companyId": false,
+          "tier": false,
+          "tools": false,
+          "access": false
+        },
+        "facts": [],
+        "events": [],
+        "embed": false,
+        "byokRelayPaths": []
+      },
+      "type": "object",
+      "properties": {
+        "identity": {
+          "default": {
+            "companyId": false,
+            "tier": false,
+            "tools": false,
+            "access": false
+          },
+          "type": "object",
+          "properties": {
+            "companyId": {
+              "default": false,
+              "type": "boolean"
+            },
+            "tier": {
+              "default": false,
+              "type": "boolean"
+            },
+            "tools": {
+              "default": false,
+              "type": "boolean"
+            },
+            "access": {
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        },
+        "facts": {
+          "default": [],
+          "maxItems": 50,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          }
+        },
+        "events": {
+          "default": [],
+          "maxItems": 50,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          }
+        },
+        "embed": {
+          "default": false,
+          "type": "boolean"
+        },
+        "byokRelayPaths": {
+          "default": [],
+          "maxItems": 20,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        }
+      }
+    },
+    "certification": {
+      "type": "object",
+      "properties": {
+        "resourcePath": {
+          "default": "/api/v1/resources",
+          "type": "string",
+          "maxLength": 200,
+          "pattern": "^\\/.*"
+        },
+        "recordPathTemplate": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "healthPath": {
+          "default": "/api/v1/health",
+          "type": "string",
+          "maxLength": 200,
+          "pattern": "^\\/.*"
+        }
+      }
+    }
+  },
+  "required": [
+    "service",
+    "displayName",
+    "contractVersion"
+  ]
+}
