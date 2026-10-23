@@ -42,8 +42,12 @@ export const MAX_TOKEN_TTL_SECONDS = 300;
  * runs a clock that agrees with the workspace's to the second — NTP, not
  * hope — and gets a bound it can actually quote.
  */
-/** The only scopes the workspace mints. Anything else means "not our token". */
-export const KNOWN_SCOPES = Object.freeze(["read", "write", "embed"]);
+/**
+ * The only scopes the workspace mints. Anything else means "not our token".
+ * `merge` is minted only for `POST /api/v1/subject/merge` (the workspace folding
+ * one person into another); it is not a write scope anywhere else here.
+ */
+export const KNOWN_SCOPES = Object.freeze(["read", "write", "embed", "merge"]);
 /** A real org id. Short, cute strings like "demo" are not tenants. */
 const ORG_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/;
 /**

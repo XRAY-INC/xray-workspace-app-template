@@ -79,6 +79,7 @@ test("the public four stay public even when nothing is configured", async () => 
 test("the manifest carries what the workspace's schema requires", () => {
   assert.equal(manifest.contractVersion, "v1");
   assert.equal(manifest.capabilities.search, true);
+  assert.equal(manifest.capabilities.merge, true);
   assert.match(manifest.service, /^[a-z0-9]{3,32}$/);
   assert.equal(manifest.capabilities.pages, true);
   assert.equal(manifest.certification.resourcePath, "/api/v1/resources");
@@ -255,4 +256,128 @@ test("search answers only the signed identity's own to-dos, linking inside the a
   assert.equal((await get(`/api/v1/search?q=c`, signedHeaders(A))).status, 400);
   assert.equal((await get(`/api/v1/search?q=certification&${hint(A)}`)).status, 401);
   assert.equal((await get(`/api/v1/search?q=certification`, tamperedHeaders(A))).status, 401);
+});
+
+// ── Subject merge: POST /api/v1/subject/merge ────────────────────────────────
+
+/** The call the workspace's fan-out makes: service key, merge token, body. */
+function mergeHeaders(survivor, { scope = ["merge"], key = EMBED_KEY } = {}) {
+  return {
+    "X-Workspace-Api-Key": API_KEY,
+    "X-Workspace-Token": mintTestToken(key, { sub: survivor, scope }),
+    "Content-Type": "application/json",
+  };
+}
+const merge = (body, headers = mergeHeaders(body.to.email)) =>
+  fetch(`${base}/api/v1/subject/merge`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    redirect: "manual",
+  });
+const mergeBody = (from, to, requestId) => ({
+  requestId,
+  from: { emails: [from] },
+  to: { email: to, emails: [to, from] },
+  reason: "linked_email",
+});
+const titles = async (email) =>
+  (await (await get("/api/v1/resources", signedHeaders({ email }))).json()).data.items
+    .map((todo) => todo.title)
+    .sort();
+
+test("merge moves the absorbed person's to-dos to the survivor, who wins collisions", async () => {
+  const from = `absorbed.${randomUUID()}@example.com`;
+  const to = `survivor.${randomUUID()}@example.com`;
+  // Both have the three starter to-dos; the absorbed one also has their own.
+  await get("/api/v1/resources", signedHeaders({ email: to }));
+  await fetch(`${base}/api/v1/actions/add-todo`, {
+    method: "POST",
+    headers: {
+      ...signedHeaders({ email: from }),
+      "Idempotency-Key": randomUUID(),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ values: { title: "Booked under the old address" } }),
+  });
+
+  const res = await merge(mergeBody(from, to, `m-${randomUUID()}`));
+  assert.equal(res.status, 200);
+  const { data } = await res.json();
+  assert.equal(data.status, "done");
+  assert.deepEqual(data.moved, { todos: 1 });
+  assert.deepEqual(data.conflicts, [{ label: "starter_todos", kept: "to", count: 3 }]);
+  assert.deepEqual(await titles(to), [
+    "Booked under the old address",
+    "Read the manifest contract",
+    "Run certification",
+    "Submit for review",
+  ]);
+});
+
+test("merge is idempotent on requestId, and a repeat under a new id is done", async () => {
+  const from = `absorbed.${randomUUID()}@example.com`;
+  const to = `survivor.${randomUUID()}@example.com`;
+  await get("/api/v1/resources", signedHeaders({ email: from }));
+  const requestId = `m-${randomUUID()}`;
+  const first = await (await merge(mergeBody(from, to, requestId))).json();
+  const retry = await merge(mergeBody(from, to, requestId));
+  assert.equal(retry.status, 200);
+  assert.deepEqual(await retry.json(), first);
+  assert.equal(first.data.status, "done");
+
+  const again = await (await merge(mergeBody(from, to, `m-${randomUUID()}`))).json();
+  assert.equal(again.data.status, "done");
+  assert.deepEqual(again.data.moved, {});
+
+  // Merging INTO someone already absorbed is refused with 409.
+  const into = await merge(
+    mergeBody(`third.${randomUUID()}@example.com`, from, `m-${randomUUID()}`),
+  );
+  assert.equal(into.status, 409);
+  assert.equal((await into.json()).error.code, "MERGE_CONFLICT");
+});
+
+test("merge answers nothing_to_merge when it holds nothing for the absorbed person", async () => {
+  const from = `never.seen.${randomUUID()}@example.com`;
+  const to = `survivor.${randomUUID()}@example.com`;
+  const requestId = `m-${randomUUID()}`;
+  const res = await merge(mergeBody(from, to, requestId));
+  assert.equal(res.status, 200);
+  assert.deepEqual((await res.json()).data, {
+    requestId,
+    status: "nothing_to_merge",
+    moved: {},
+    conflicts: [],
+  });
+});
+
+test("an unauthenticated, wrongly scoped or mismatched merge is refused", async () => {
+  const from = `absorbed.${randomUUID()}@example.com`;
+  const to = `survivor.${randomUUID()}@example.com`;
+  await get("/api/v1/resources", signedHeaders({ email: from }));
+  const body = mergeBody(from, to, `m-${randomUUID()}`);
+
+  assert.equal((await merge(body, { "Content-Type": "application/json" })).status, 401);
+  const noKey = mergeHeaders(to);
+  delete noKey["X-Workspace-Api-Key"];
+  assert.equal((await merge(body, noKey)).status, 401);
+  assert.equal((await merge(body, mergeHeaders(to, { key: "xre_someone_else" }))).status, 401);
+  const readOnly = await merge(body, mergeHeaders(to, { scope: ["read"] }));
+  assert.equal(readOnly.status, 403);
+  assert.equal((await readOnly.json()).error.code, "SCOPE_INSUFFICIENT");
+  const mismatch = await merge(body, mergeHeaders(`someone.${randomUUID()}@example.com`));
+  assert.equal(mismatch.status, 403);
+  assert.equal((await mismatch.json()).error.code, "IDENTITY_MISMATCH");
+  assert.equal((await merge({ ...body, extra: true }, mergeHeaders(to))).status, 400);
+  assert.equal((await merge({ ...body, reason: "because" }, mergeHeaders(to))).status, 400);
+  // The private gate fails closed on an unconfigured instance, merge included.
+  const closed = await fetch(`${unconfiguredBase}/api/v1/subject/merge`, {
+    method: "POST",
+    headers: mergeHeaders(to),
+    body: JSON.stringify(body),
+  });
+  assert.equal(closed.status, 401);
+
+  assert.equal((await titles(from)).length, 3, "nothing moved");
 });

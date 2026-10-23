@@ -76,6 +76,44 @@ export function createStore() {
       notes.set(note.id, note);
       return { ok: true, note };
     },
+    /**
+     * Fold one person into another, inside ONE tenant (subject merge).
+     *
+     * Every note owned by any of `fromEmails` in `companyId` is re-keyed to
+     * `toEmail`. Nothing outside the tenant is reachable from here, so a merge
+     * asked for by one organization cannot move another organization's rows.
+     *
+     * `uniqueTitle` names the one note each person has at most one of (the
+     * starter note). Where the survivor already has it, the absorbed copy is
+     * dropped and counted: the survivor wins collisions. Everything else
+     * moves; a merge moves data, it does not erase it.
+     *
+     * The per-owner quota is not applied: it bounds what a person can ADD,
+     * and refusing a merge over it would strand the absorbed rows.
+     */
+    mergeOwners(companyId, fromEmails, toEmail, { uniqueTitle } = {}) {
+      const from = new Set(fromEmails);
+      let survivorHasUnique = owned(companyId, toEmail).some((note) => note.title === uniqueTitle);
+      let moved = 0;
+      let dropped = 0;
+      // Oldest first, so the survivor keeps the earliest copy it is given.
+      const absorbed = [...notes.values()]
+        .filter((note) => note.companyId === companyId && from.has(note.ownerEmail))
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      for (const note of absorbed) {
+        if (uniqueTitle !== undefined && note.title === uniqueTitle) {
+          if (survivorHasUnique) {
+            notes.delete(note.id);
+            dropped += 1;
+            continue;
+          }
+          survivorHasUnique = true;
+        }
+        notes.set(note.id, Object.freeze({ ...note, ownerEmail: toEmail }));
+        moved += 1;
+      }
+      return { moved, dropped };
+    },
     /** Tenant-scoped delete: cannot reach out of the tenant it was given. */
     removeInTenant(companyId, id) {
       const note = this.getInTenant(companyId, id);

@@ -42,7 +42,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 import { parseExampleConfig } from "./config.mjs";
-import { isRealTenant, verifyIdentityToken } from "./identity-token.mjs";
+import { isRealTenant, normalizeEmail, verifyIdentityToken } from "./identity-token.mjs";
 import { authorizeRequest } from "./authorize.mjs";
 import { createStore } from "./store.mjs";
 import { themeFromSearch } from "./public/protocol.mjs";
@@ -67,6 +67,30 @@ const WRITE_SCOPES = Object.freeze(["write", "embed"]);
 const addNoteSchema = z.object({ title: z.string().trim().min(1).max(200) }).strict();
 const noteIdSchema = z.string().uuid();
 const idempotencyKeySchema = z.string().trim().min(8).max(128);
+/**
+ * `POST /api/v1/subject/merge` (MICROSERVICE-API-SPEC §6.6). Strict like the
+ * rest: an unknown key is a 400, not a silent ignore. Emails ride in this
+ * body, never the URL. A person has a primary and up to 10 linked addresses.
+ */
+const mergeEmailSchema = z
+  .string()
+  .trim()
+  .max(320)
+  .regex(/^[^\s@]+@[^\s@]+$/);
+const MAX_MERGE_EMAILS = 11;
+const mergeRequestSchema = z
+  .object({
+    requestId: z.string().trim().min(1).max(64),
+    from: z.object({ emails: z.array(mergeEmailSchema).min(1).max(MAX_MERGE_EMAILS) }).strict(),
+    to: z
+      .object({
+        email: mergeEmailSchema,
+        emails: z.array(mergeEmailSchema).max(MAX_MERGE_EMAILS),
+      })
+      .strict(),
+    reason: z.enum(["linked_email", "account_unify", "support"]),
+  })
+  .strict();
 
 // ── responses ───────────────────────────────────────────────────────────────
 
@@ -228,6 +252,10 @@ export function buildManifest(config) {
       // Every service serves search, so the workspace's ⌘K finds its records.
       // `GET /api/v1/search` below; certification probes it.
       search: true,
+      // Every service can fold one person into another when the workspace
+      // links their emails or unifies two accounts.
+      // `POST /api/v1/subject/merge` below; certification probes it.
+      merge: true,
     },
     requestedGrants: {
       identity: {
@@ -381,6 +409,16 @@ export function createApp(options) {
   const manifest = buildManifest(config);
   /** key → {status, body}. Bounded; a fixture, not a durable ledger. */
   const idempotency = new Map();
+  /**
+   * Subject merges. `merges` is the audit trail and the idempotency record:
+   * [companyId, requestId] → the answer given. `foldedInto` remembers who was
+   * absorbed into whom, per tenant, so a repeat is `done` and a merge INTO
+   * someone already absorbed is refused. A real service keeps both durably:
+   * there is no unmerge endpoint, so support reverses a mistake from them.
+   */
+  const merges = new Map();
+  const foldedInto = new Map();
+  const foldKey = (companyId, email) => JSON.stringify([companyId, email]);
 
   /**
    * Turn a bearer token into a decision. Three checks, all mandatory, in this
@@ -596,6 +634,115 @@ export function createApp(options) {
     return { email: verified.identity.email, companyId: verified.identity.companyId };
   }
 
+  /**
+   * `POST /api/v1/subject/merge` (MICROSERVICE-API-SPEC §6.6).
+   *
+   *   · Idempotent on `requestId`: a retry gets the recorded answer, and a
+   *     merge of someone already folded into the survivor is `done`.
+   *   · The survivor wins collisions (the starter note), reported in
+   *     `conflicts`. Everything else moves; nothing is erased.
+   *   · Nothing held for `from` is `nothing_to_merge`.
+   *   · `409 MERGE_CONFLICT` when the survivor was itself folded into someone
+   *     else: the workspace re-sends with the final survivor.
+   */
+  async function subjectMerge(req, res) {
+    if (!hasServiceKey(req, config)) {
+      return fail(res, 401, "UNAUTHENTICATED", "Missing or invalid service key.");
+    }
+    const raw = req.headers["x-workspace-token"] ?? bearerToken(req);
+    const verified = verifyIdentityToken(typeof raw === "string" ? raw : null, {
+      secrets: config.embedKeys,
+      audience: config.slug,
+      now: Math.floor(now() / 1000),
+      // A read, write or embed token is not a licence to re-key people.
+      requireScope: "merge",
+    });
+    if (!verified.ok) {
+      logEvent("warn", "merge_token_rejected", { reason: verified.reason });
+      return verified.reason === "scope"
+        ? fail(res, 403, "SCOPE_INSUFFICIENT", "A subject merge needs a token of scope merge.")
+        : fail(
+            res,
+            401,
+            "UNAUTHENTICATED",
+            "This endpoint needs the service key and a merge token.",
+          );
+    }
+    const identity = verified.identity;
+
+    const body = await readBody(req);
+    if (body.error === "too_large") {
+      return fail(res, 413, "PAYLOAD_TOO_LARGE", "That request body is too large.");
+    }
+    if (body.error) return fail(res, 400, "VALIDATION_ERROR", "Body must be a JSON object.");
+    const parsed = mergeRequestSchema.safeParse(body.value);
+    if (!parsed.success) {
+      return fail(
+        res,
+        400,
+        "VALIDATION_ERROR",
+        "Send requestId, from.emails, to.email, to.emails and reason.",
+      );
+    }
+    const { requestId } = parsed.data;
+    const toEmail = normalizeEmail(parsed.data.to.email);
+    const fromEmails = [...new Set(parsed.data.from.emails.map(normalizeEmail))];
+    if (fromEmails.includes(toEmail)) {
+      return fail(res, 400, "VALIDATION_ERROR", "The survivor cannot also be absorbed.");
+    }
+    // The token is minted for the survivor. A body naming someone else is
+    // refused, never resolved in either direction — the same rule as the
+    // `?email=` hint on the read surface.
+    if (identity.email !== toEmail) {
+      logEvent("warn", "merge_identity_mismatch", {});
+      return fail(res, 403, "IDENTITY_MISMATCH", "to.email does not match the signed token.");
+    }
+    // The slow-body rule: re-check the token right before anything changes.
+    if (now() >= identity.expiresAt * 1000) return expiredNow(res);
+
+    const { companyId } = identity;
+    const ledgerKey = JSON.stringify([companyId, requestId]);
+    const seen = merges.get(ledgerKey);
+    if (seen) return ok(res, seen);
+
+    if (foldedInto.has(foldKey(companyId, toEmail))) {
+      return fail(res, 409, "MERGE_CONFLICT", "to has itself been merged into another person.");
+    }
+
+    const result = store.mergeOwners(companyId, fromEmails, toEmail, { uniqueTitle: STARTER_NOTE });
+    const alreadyFolded = fromEmails.every(
+      (email) => foldedInto.get(foldKey(companyId, email)) === toEmail,
+    );
+    const changed = result.moved + result.dropped > 0;
+    const status = changed || alreadyFolded ? "done" : "nothing_to_merge";
+    if (status === "done") {
+      for (const email of fromEmails) foldedInto.set(foldKey(companyId, email), toEmail);
+      // Anyone previously folded into an absorbed address now lands on the
+      // survivor, so a chain never leaves a person pointing at an empty one.
+      for (const [key, survivor] of foldedInto) {
+        if (fromEmails.includes(survivor)) foldedInto.set(key, toEmail);
+      }
+    }
+    const answer = {
+      requestId,
+      status,
+      moved: changed ? { notes: result.moved } : {},
+      conflicts:
+        result.dropped > 0 ? [{ label: "starter_note", kept: "to", count: result.dropped }] : [],
+    };
+    if (merges.size > 5_000) merges.clear();
+    merges.set(ledgerKey, answer);
+    // Counts and ids only: no email ever reaches a log line.
+    logEvent("info", "subject_merge", {
+      requestId,
+      reason: parsed.data.reason,
+      status,
+      moved: result.moved,
+      dropped: result.dropped,
+    });
+    return ok(res, answer);
+  }
+
   return http.createServer(async (req, res) => {
     let url;
     try {
@@ -722,6 +869,15 @@ export function createApp(options) {
             score: note.title.toLowerCase().startsWith(q) ? 0.9 : 0.6,
           }));
         return ok(res, { results });
+      }
+
+      // ── subject merge: the workspace folds one person into another ───────
+      // The same two credentials as search, with an identity token of scope
+      // `merge` whose `sub` is the survivor. Who is absorbed rides in the
+      // body, never the URL. Runs inside the token's tenant only, over the
+      // same rows everything else reads. See `subjectMerge` below.
+      if (method === "POST" && path === "/api/v1/subject/merge") {
+        return subjectMerge(req, res);
       }
 
       // ── server-driven pages: the platform's own call, service key only ───

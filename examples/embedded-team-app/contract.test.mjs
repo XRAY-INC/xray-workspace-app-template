@@ -118,4 +118,5 @@ test("the manifest passes the Workspace's registration schema", () => {
   assert.equal(manifest.requestedGrants.embed, true);
   assert.equal(manifest.capabilities.embed?.path, "/embed");
   assert.equal(manifest.capabilities.search, true);
+  assert.equal(manifest.capabilities.merge, true);
 });

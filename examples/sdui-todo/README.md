@@ -41,7 +41,7 @@ a different service and it draws that product instead. That is the whole idea.
 
 | File                         | Role                                                                                             |
 | ---------------------------- | ------------------------------------------------------------------------------------------------ |
-| `server.mjs`                 | The runnable service: every required endpoint, pages, one form action, search, tenant isolation |
+| `server.mjs`                 | The runnable service: every required endpoint, pages, one form action, search, subject merge, tenant isolation |
 | `blocks.ts`                  | The block vocabulary as a Zod schema + TS types: validate your own output against it             |
 | `types.ts`                   | The service's private domain model (`Todo`)                                                      |
 | `todo-repository.ts`         | Data layer: an upstream-API adapter **and** a seed fallback behind one interface                 |
