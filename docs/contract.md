@@ -74,6 +74,7 @@ GET /api/v1/manifest   → 200 {"data":{ …your manifest }}
 | -------------------------------------------- | ------------------------------------------------------------------ |
 | `GET /api/v1/resources`, `/resources/{id}`   | Your records, scoped to the token's identity. Certification probes these. |
 | `GET /api/v1/search?q=&limit=`               | ⌘K search across your records (below).                             |
+| `POST /api/v1/subject/merge`                 | Fold one person into another when emails are linked (below).       |
 | `GET /api/v1/pages`, `/pages/{id}`           | Server-driven UI: your page list and `PageDocument`s.              |
 | `POST /api/v1/actions/{id}`                  | A block's action (a button, a form). Requires `Idempotency-Key`.   |
 
@@ -106,6 +107,60 @@ GET /api/v1/search?q=<at least 2 chars>&limit=<1-10>
 - **Certification probes it** once declared: the shape, a refusal without an
   identity, and that one tenant never finds another's records.
 
+### Subject merge: every app joins it
+
+A person can link more than one email to their workspace account, and can
+combine two accounts they own. When that happens the workspace asks every app
+to fold the absorbed person's data into the survivor's, so nothing bought,
+booked or written under the old address is stranded. Serve the endpoint and
+declare `"capabilities": { "merge": true }`; both apps here ship it on.
+
+```http
+POST /api/v1/subject/merge
+  X-Workspace-Api-Key: <your service key>
+  X-Workspace-Token:   <identity token, scope "merge", sub = the survivor>
+  Content-Type:        application/json
+
+{"requestId":"m_8f2c…",                       // ≤ 64 chars, the idempotency key
+ "from":{"emails":["old@example.com"]},       // the absorbed person: primary + linked
+ "to":{"email":"pat@example.com",             // the survivor
+       "emails":["pat@example.com","old@example.com"]},  // primary + linked, after the merge
+ "reason":"linked_email"}                     // or "account_unify" | "support"
+
+→ 200 {"data":{"requestId":"m_8f2c…","status":"done",
+               "moved":{"notes":3},
+               "conflicts":[{"label":"starter_note","kept":"to","count":1}]}}
+→ 200 {"data":{"requestId":"m_8f2c…","status":"nothing_to_merge","moved":{},"conflicts":[]}}
+→ 202 {"data":{"requestId":"m_8f2c…","status":"accepted"}}   (long-running; see below)
+→ 400 VALIDATION_ERROR · 401 without a valid key and token · 403 wrong scope or survivor
+→ 409 MERGE_CONFLICT when the survivor was itself merged into someone else
+```
+
+- **The emails ride in the signed request body, never the URL.** The token's
+  `sub` is the survivor; a body naming a different `to.email` is refused.
+  A `read`, `write` or `embed` token cannot merge, and a `merge` token is not
+  a write token anywhere else in your app.
+- **Idempotent on `requestId`.** A retry gets the answer the first call got. A
+  new request for a pair you already folded answers `done`, never an error.
+- **The survivor wins collisions.** Where you allow one of something per
+  person (one starter note, one reaction per item, one membership per org),
+  keep the `to` row, drop or sum the `from` row, and report it in `conflicts`
+  as `{label, kept: "to", count}`. Money never deduplicates: a purchase, a
+  ledger entry or a package always moves.
+- **A merge moves, it does not erase.** Erasure is the privacy contract's job.
+  Keep each request and its answer: there is no unmerge endpoint, so support
+  reverses a mistaken merge by hand from your record.
+- **Nothing held, `nothing_to_merge`.** Every app is asked, so most answers
+  are this one. Create nothing on the way.
+- **Stay inside the tenant.** The token's `companyId` is the organization
+  asking; another organization's rows are not yours to move.
+- **20 seconds.** Answer within it, or return `202` and finish in the
+  background; the workspace polls `GET /api/v1/subject/merge/{requestId}`.
+  Both apps here answer synchronously.
+- **Certification probes it** once declared: the shape and a matching second
+  call, that merging A into B leaves C untouched, and a refusal without an
+  identity.
+
 ---
 
 ## The manifest
@@ -125,7 +180,7 @@ before you register. Two rules JSON Schema cannot express are also enforced:
   "tagline": "Shipments, ETAs & delivery proof",
   "description": "What it does, in one sentence.",
   "requiredTier": "free",
-  "capabilities": { "pages": true, "events": false, "search": true },
+  "capabilities": { "pages": true, "events": false, "search": true, "merge": true },
   "requestedGrants": {
     "identity": { "companyId": false, "tier": false, "tools": false, "access": false },
     "facts": [],

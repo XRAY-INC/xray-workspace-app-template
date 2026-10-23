@@ -53,6 +53,7 @@ describe("the registered-service contract", () => {
     assert.equal(manifest.contractVersion, "v1");
     assert.equal(manifest.capabilities.embed.path, "/embed");
     assert.equal(manifest.capabilities.search, true);
+    assert.equal(manifest.capabilities.merge, true);
     assert.equal(manifest.requestedGrants.embed, true);
     // The tenant key and the role data. Without either, the admin plane and
     // the tenant scoping have nothing to stand on.
@@ -186,6 +187,163 @@ describe("the registered-service contract", () => {
     assert.equal(res.status, 405);
     assert.equal(res.headers.get("allow"), "GET, HEAD, POST, DELETE");
     assert.equal((await app.request("/nope")).status, 404);
+  });
+});
+
+describe("subject merge: POST /api/v1/subject/merge", () => {
+  const ABSORBED = "old.address@example.com";
+
+  /** The call the workspace's fan-out makes: service key, merge token, body. */
+  function merge(local, body, token = makeToken({ sub: MEMBER, scope: ["merge"] })) {
+    return local.asProxy("/api/v1/subject/merge", token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+  const request = (overrides = {}) => ({
+    requestId: "merge-0001",
+    from: { emails: [ABSORBED] },
+    to: { email: MEMBER, emails: [MEMBER, ABSORBED] },
+    reason: "linked_email",
+    ...overrides,
+  });
+
+  test("moves the absorbed person's notes to the survivor, who wins collisions", async () => {
+    const store = createStore();
+    // Both people have a starter note: one per person, so the survivor's stays.
+    store.add({ companyId: COMPANY_A, ownerEmail: MEMBER, title: "Welcome to Team Notes" });
+    store.add({ companyId: COMPANY_A, ownerEmail: ABSORBED, title: "Welcome to Team Notes" });
+    store.add({
+      companyId: COMPANY_A,
+      ownerEmail: ABSORBED,
+      title: "Bought under the old address",
+    });
+    // The same address in ANOTHER tenant: this tenant's merge cannot reach it.
+    const elsewhere = store.add({ companyId: COMPANY_B, ownerEmail: ABSORBED, title: "Other org" });
+    const local = await startApp({ store });
+
+    const res = await merge(local, request());
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.data, {
+      requestId: "merge-0001",
+      status: "done",
+      moved: { notes: 1 },
+      conflicts: [{ label: "starter_note", kept: "to", count: 1 }],
+    });
+    assert.deepEqual(
+      store
+        .listOwn(COMPANY_A, MEMBER)
+        .map((note) => note.title)
+        .sort(),
+      ["Bought under the old address", "Welcome to Team Notes"],
+    );
+    assert.equal(store.listOwn(COMPANY_A, ABSORBED).length, 0);
+    assert.deepEqual(
+      store.listOwn(COMPANY_B, ABSORBED).map((note) => note.id),
+      [elsewhere.note.id],
+    );
+    await local.close();
+  });
+
+  test("is idempotent on requestId, and a repeat under a new id is done, not an error", async () => {
+    const store = createStore();
+    store.add({ companyId: COMPANY_A, ownerEmail: ABSORBED, title: "One note" });
+    const local = await startApp({ store });
+
+    const first = await merge(local, request());
+    // Data under the absorbed address after the merge does not change a
+    // retry: the same requestId always gets the answer it got the first time.
+    store.add({ companyId: COMPANY_A, ownerEmail: ABSORBED, title: "Arrived later" });
+    const retry = await merge(local, request());
+    assert.equal(retry.status, 200);
+    assert.deepEqual(retry.body, first.body);
+    assert.equal(first.body.data.status, "done");
+
+    // A new request for a pair already folded is `done`.
+    store.removeInTenant(COMPANY_A, store.listOwn(COMPANY_A, ABSORBED)[0].id);
+    const again = await merge(local, request({ requestId: "merge-0002" }));
+    assert.equal(again.status, 200);
+    assert.deepEqual(again.body.data, {
+      requestId: "merge-0002",
+      status: "done",
+      moved: {},
+      conflicts: [],
+    });
+
+    // Merging INTO someone already absorbed is refused: the workspace re-sends
+    // with the final survivor.
+    const into = await merge(
+      local,
+      request({
+        requestId: "merge-0003",
+        from: { emails: ["third@example.com"] },
+        to: { email: ABSORBED, emails: [ABSORBED] },
+      }),
+      makeToken({ sub: ABSORBED, scope: ["merge"] }),
+    );
+    assert.equal(into.status, 409);
+    assert.equal(into.body.error.code, "MERGE_CONFLICT");
+    await local.close();
+  });
+
+  test("answers nothing_to_merge when it holds nothing for the absorbed person", async () => {
+    const store = createStore();
+    store.add({ companyId: COMPANY_A, ownerEmail: MEMBER, title: "Mine" });
+    const local = await startApp({ store });
+    const res = await merge(local, request({ requestId: "merge-empty" }));
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.data, {
+      requestId: "merge-empty",
+      status: "nothing_to_merge",
+      moved: {},
+      conflicts: [],
+    });
+    // And it provisioned nothing for anyone along the way.
+    assert.equal(store.listOwn(COMPANY_A, MEMBER).length, 1);
+    assert.equal(store.listOwn(COMPANY_A, ABSORBED).length, 0);
+    await local.close();
+  });
+
+  test("refuses an unauthenticated, wrongly scoped or mismatched merge, and moves nothing", async () => {
+    const store = createStore();
+    store.add({ companyId: COMPANY_A, ownerEmail: ABSORBED, title: "Keep me put" });
+    const local = await startApp({ store });
+    const body = JSON.stringify(request({ requestId: "merge-denied" }));
+    const post = (headers) =>
+      local.request("/api/v1/subject/merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers },
+        body,
+      });
+    const mergeToken = makeToken({ sub: MEMBER, scope: ["merge"] });
+
+    // No credentials; the service key alone; a merge token without the key.
+    assert.equal((await post({})).status, 401);
+    assert.equal((await post({ "X-Workspace-Api-Key": SERVICE_API_KEY })).status, 401);
+    assert.equal((await post({ "X-Workspace-Token": mergeToken })).status, 401);
+    // A forged token: right claims, wrong key.
+    const forged = makeToken({ key: SERVICE_API_KEY, sub: MEMBER, scope: ["merge"] });
+    assert.equal((await merge(local, request(), forged)).status, 401);
+    // A real token that may read, write or open the app may not re-key people.
+    const wrongScope = await merge(
+      local,
+      request(),
+      makeToken({ scope: ["read", "write", "embed"] }),
+    );
+    assert.equal(wrongScope.status, 403);
+    assert.equal(wrongScope.body.error.code, "SCOPE_INSUFFICIENT");
+    // A merge token for one person cannot fold someone into another person.
+    const mismatch = await merge(local, request(), makeToken({ sub: ADMIN, scope: ["merge"] }));
+    assert.equal(mismatch.status, 403);
+    assert.equal(mismatch.body.error.code, "IDENTITY_MISMATCH");
+    // An unknown shape, and a body that names the survivor as absorbed.
+    assert.equal((await merge(local, { ...request(), companyId: COMPANY_B })).status, 400);
+    assert.equal((await merge(local, request({ from: { emails: [MEMBER] } }))).status, 400);
+    assert.equal((await merge(local, request({ reason: "because" }))).status, 400);
+
+    assert.equal(store.listOwn(COMPANY_A, ABSORBED).length, 1, "nothing moved");
+    await local.close();
   });
 });
 

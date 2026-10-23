@@ -17,6 +17,8 @@
  *   GET  /api/v1/resources, /api/v1/resources/{id}           — private, certified
  *   GET  /api/v1/pages, /api/v1/pages/{id}                   — private, server-driven UI
  *   POST /api/v1/actions/{actionId}                          — private, Idempotency-Key
+ *   GET  /api/v1/search?q=&limit=                            — private, ⌘K search
+ *   POST /api/v1/subject/merge                               — private, scope `merge`
  *
  * ── Identity: signed, or not served at all
  *
@@ -163,7 +165,11 @@ function resolveIdentity(req, url, { embedKey, slug }) {
       code: "IDENTITY_MISMATCH",
     };
   }
-  return { email: verified.email, companyId: verified.claims.companyId ?? null };
+  return {
+    email: verified.email,
+    companyId: verified.claims.companyId ?? null,
+    scope: verified.claims.scope,
+  };
 }
 
 function apiKeyOk(req, apiKey) {
@@ -177,6 +183,8 @@ function apiKeyOk(req, apiKey) {
 // ── data: one to-do list per identity ───────────────────────────────────────
 
 const lists = new Map(); // email → Map<id, todo>
+/** Ids of the seeded starter to-dos: each person has at most one of each. */
+const starterIds = new Set();
 
 /**
  * Seed three to-dos the first time an identity is seen. FIXTURE AFFORDANCE —
@@ -191,6 +199,7 @@ function listFor(email) {
     for (const title of ["Read the manifest contract", "Run certification", "Submit for review"]) {
       const id = randomUUID();
       seeded.set(id, { id, title, done: false, createdAt: new Date().toISOString() });
+      starterIds.add(id);
     }
     lists.set(email, seeded);
   }
@@ -221,7 +230,10 @@ export const manifest = {
   requiredTier: "free",
   // `search`: every service serves search, so the workspace's ⌘K finds its
   // records. `GET /api/v1/search` below; certification probes it.
-  capabilities: { pages: true, events: false, search: true },
+  // `merge`: every service can fold one person into another when the
+  // workspace links their emails or unifies two accounts.
+  // `POST /api/v1/subject/merge` below; certification probes it.
+  capabilities: { pages: true, events: false, search: true, merge: true },
   requestedGrants: {
     identity: { companyId: false, tier: false, tools: false },
     facts: [],
@@ -281,6 +293,106 @@ async function readJson(req) {
 }
 
 const idempotencySeen = new Map(); // key → result
+
+// ── subject merge (MICROSERVICE-API-SPEC §6.6) ──────────────────────────────
+
+const MERGE_REASONS = new Set(["linked_email", "account_unify", "support"]);
+const MAX_MERGE_EMAILS = 11; // a primary and up to 10 linked addresses
+/**
+ * The audit trail and the idempotency record: requestId → the answer given.
+ * A real service keeps it durably; there is no unmerge endpoint, so support
+ * reverses a mistaken merge from it.
+ */
+const merges = new Map();
+/** absorbed email → survivor email. */
+const foldedInto = new Map();
+
+const isEmail = (value) =>
+  typeof value === "string" && value.length <= 320 && /^[^\s@]+@[^\s@]+$/.test(value.trim());
+const isEmailList = (value) =>
+  Array.isArray(value) && value.length <= MAX_MERGE_EMAILS && value.every(isEmail);
+const hasOnly = (value, keys) =>
+  value !== null &&
+  typeof value === "object" &&
+  !Array.isArray(value) &&
+  Object.keys(value).every((key) => keys.includes(key));
+
+/** The §6.6 request shape, strictly: an unknown key is a 400, not ignored. */
+export function parseMergeRequest(body) {
+  if (!hasOnly(body, ["requestId", "from", "to", "reason"])) return null;
+  const { requestId, from, to, reason } = body;
+  if (typeof requestId !== "string" || !requestId.trim() || requestId.trim().length > 64)
+    return null;
+  if (!hasOnly(from, ["emails"]) || !isEmailList(from.emails) || from.emails.length === 0)
+    return null;
+  if (!hasOnly(to, ["email", "emails"]) || !isEmail(to.email) || !isEmailList(to.emails))
+    return null;
+  if (!MERGE_REASONS.has(reason)) return null;
+  const normal = (email) => email.trim().toLowerCase();
+  return {
+    requestId: requestId.trim(),
+    reason,
+    fromEmails: [...new Set(from.emails.map(normal))],
+    toEmail: normal(to.email),
+  };
+}
+
+/**
+ * Fold `fromEmails` into `toEmail`. To-dos are keyed by email alone, so the
+ * whole list moves. The survivor wins collisions: an absorbed starter to-do
+ * the survivor already has is dropped and reported in `conflicts`. Nothing
+ * else is dropped — a merge moves data, it does not erase it.
+ *
+ * Reads `lists` directly, never `listFor`: a merge must not seed a starter
+ * list for someone this app has never seen.
+ */
+function mergeSubjects({ requestId, fromEmails, toEmail }) {
+  const seen = merges.get(requestId);
+  if (seen) return { answer: seen };
+  if (foldedInto.has(toEmail)) return { conflict: true };
+
+  const survivor = lists.get(toEmail) ?? new Map();
+  const survivorTitles = new Set(
+    [...survivor.values()].filter((t) => starterIds.has(t.id)).map((t) => t.title),
+  );
+  let moved = 0;
+  let dropped = 0;
+  for (const email of fromEmails) {
+    const absorbed = lists.get(email);
+    if (!absorbed) continue;
+    for (const todo of absorbed.values()) {
+      if (starterIds.has(todo.id) && survivorTitles.has(todo.title)) {
+        starterIds.delete(todo.id);
+        dropped += 1;
+        continue;
+      }
+      if (starterIds.has(todo.id)) survivorTitles.add(todo.title);
+      survivor.set(todo.id, todo);
+      moved += 1;
+    }
+    lists.delete(email);
+  }
+  const changed = moved + dropped > 0;
+  if (changed) lists.set(toEmail, survivor);
+
+  const alreadyFolded = fromEmails.every((email) => foldedInto.get(email) === toEmail);
+  const status = changed || alreadyFolded ? "done" : "nothing_to_merge";
+  if (status === "done") {
+    for (const email of fromEmails) foldedInto.set(email, toEmail);
+    // A chain never leaves anyone pointing at an absorbed address.
+    for (const [email, into] of foldedInto) {
+      if (fromEmails.includes(into)) foldedInto.set(email, toEmail);
+    }
+  }
+  const answer = {
+    requestId,
+    status,
+    moved: changed ? { todos: moved } : {},
+    conflicts: dropped > 0 ? [{ label: "starter_todos", kept: "to", count: dropped }] : [],
+  };
+  merges.set(requestId, answer);
+  return { answer };
+}
 
 export function createApp({ slug = SLUG, embedKey = EMBED_KEY, apiKey = WORKSPACE_API_KEY } = {}) {
   return http.createServer(async (req, res) => {
@@ -352,6 +464,42 @@ export function createApp({ slug = SLUG, embedKey = EMBED_KEY, apiKey = WORKSPAC
           score: todo.title.toLowerCase().startsWith(q) ? 0.9 : 0.6,
         }));
       return ok(res, { results });
+    }
+
+    // Subject merge: the workspace folds one person into another. The same
+    // two credentials, with a token of scope `merge` whose `sub` is the
+    // survivor; who is absorbed rides in the body, never the URL. Idempotent
+    // on `requestId`.
+    if (method === "POST" && path === "/api/v1/subject/merge") {
+      const scope = identity.scope;
+      if (!Array.isArray(scope) || !scope.includes("merge")) {
+        return fail(
+          res,
+          403,
+          "SCOPE_INSUFFICIENT",
+          "A subject merge needs a token of scope merge.",
+        );
+      }
+      const request = parseMergeRequest(await readJson(req));
+      if (!request) {
+        return fail(
+          res,
+          400,
+          "VALIDATION_ERROR",
+          "Send requestId, from.emails, to.email, to.emails and reason.",
+        );
+      }
+      if (request.fromEmails.includes(request.toEmail)) {
+        return fail(res, 400, "VALIDATION_ERROR", "The survivor cannot also be absorbed.");
+      }
+      if (request.toEmail !== email) {
+        return fail(res, 403, "IDENTITY_MISMATCH", "to.email does not match the signed token.");
+      }
+      const result = mergeSubjects(request);
+      if (result.conflict) {
+        return fail(res, 409, "MERGE_CONFLICT", "to has itself been merged into another person.");
+      }
+      return ok(res, result.answer);
     }
 
     if (method === "GET" && path === "/api/v1/pages") {

@@ -17,7 +17,8 @@ Copy the boundaries. Replace the storage.
 | [`examples/embedded-team-app`](./examples/embedded-team-app) | **Full-page embed.** The workspace frames a page on your own origin.          | you need your own UI inside the workspace   |
 
 Both serve the whole contract: health, manifest, owner-scoped resources, ⌘K
-search, and the checks the workspace's certification harness runs. Neither
+search, subject merge (folding one person into another when their emails are
+linked), and the checks the workspace's certification harness runs. Neither
 needs a framework or a build step: plain Node.js, `node:test`, and Zod.
 
 ## Quick start

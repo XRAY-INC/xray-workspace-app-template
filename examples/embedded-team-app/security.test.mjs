@@ -798,6 +798,30 @@ describe("the app refuses what it should, end to end", () => {
     await app.close();
   });
 
+  test("a merge-scoped token is not a write token anywhere but the merge endpoint", async () => {
+    // `merge` re-keys people on the workspace's behalf. It must not double as
+    // a licence to add or delete notes through the app's own backend.
+    const store = createStore();
+    const existing = store.add({ companyId: COMPANY_A, ownerEmail: MEMBER, title: "Existing" });
+    const app = await startApp({ store, authorize: stubAuthorize({ orgRole: "OWNER" }) });
+    const mergeOnly = makeToken({ scope: ["merge"] });
+
+    const write = await app.asUser("/app/notes", mergeOnly, {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey() },
+      body: JSON.stringify({ title: "Should not exist" }),
+    });
+    assert.equal(write.status, 403);
+    assert.equal(write.body.error.code, "SCOPE_INSUFFICIENT");
+    const remove = await app.asUser(`/app/org-notes/${existing.note.id}`, mergeOnly, {
+      method: "DELETE",
+      headers: { "Idempotency-Key": idempotencyKey() },
+    });
+    assert.equal(remove.status, 403);
+    assert.equal(store.listTenant(COMPANY_A).length, 1, "nothing was added or removed");
+    await app.close();
+  });
+
   test("a write-scoped token writes, and embed scope is not an admin grant", async () => {
     const store = createStore();
     const theirs = store.add({
