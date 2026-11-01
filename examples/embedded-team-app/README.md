@@ -494,6 +494,7 @@ rendered with `textContent`, never `innerHTML`.
 | `GET`    | `/api/v1/manifest`                | public                                                      | the registered-service manifest                                                     |
 | `GET`    | `/api/v1/resources`, `/…/{id}`    | service key **and** signed token                            | the real, owner-scoped handlers; also what certification probes. Read-only, offline |
 | `GET`    | `/api/v1/search?q=&limit=`        | service key **and** signed token                            | ⌘K search over your own notes; the same rows as the resources                       |
+| `GET`    | `/api/v1/search/items/{id}`       | service key **and** signed token                            | one of those search results by its id; 404 for anyone else's                        |
 | `POST`   | `/api/v1/subject/merge`           | service key **and** signed token of scope `merge`           | folds one person's notes into the survivor's, inside the token's tenant; idempotent |
 | `GET`    | `/api/v1/pages`, `/…/{id}`        | service key                                                 | carries no user data — a service credential is not a person                         |
 | `GET`    | `/embed`, `/embed/*`              | public                                                      | the framed page and its own assets                                                  |

@@ -53,6 +53,7 @@ describe("the registered-service contract", () => {
     assert.equal(manifest.contractVersion, "v1");
     assert.equal(manifest.capabilities.embed.path, "/embed");
     assert.equal(manifest.capabilities.search, true);
+    assert.equal(manifest.capabilities.searchLookup, true);
     assert.equal(manifest.capabilities.merge, true);
     assert.equal(manifest.requestedGrants.embed, true);
     // The tenant key and the role data. Without either, the admin plane and
@@ -163,6 +164,32 @@ describe("the registered-service contract", () => {
     assert.equal((await local.request("/api/v1/search?q=roadmap")).status, 401);
     const forged = makeToken({ key: SERVICE_API_KEY, sub: MEMBER, companyId: COMPANY_A });
     assert.equal((await local.asProxy("/api/v1/search?q=roadmap", forged)).status, 401);
+    await local.close();
+  });
+
+  test("search lookup answers one of the signed person's own notes by id, 404 for anyone else's", async () => {
+    // A Library pin to a note asks for it by id on every read, so a renamed
+    // note is still found. The same gate and rows as search.
+    const store = createStore();
+    const mine = store.add({ companyId: COMPANY_A, ownerEmail: MEMBER, title: "Roadmap for Acme" });
+    const theirs = store.add({ companyId: COMPANY_B, ownerEmail: MEMBER, title: "Roadmap for Globex" });
+    const local = await startApp({ store });
+    const token = makeToken({ sub: MEMBER, companyId: COMPANY_A });
+    const item = (id) => `/api/v1/search/items/${encodeURIComponent(id)}`;
+
+    const found = await local.asProxy(item(mine.note.id), token);
+    assert.equal(found.status, 200);
+    assert.equal(found.body.data.result.id, mine.note.id);
+    assert.equal(found.body.data.result.title, "Roadmap for Acme");
+    assert.ok(found.body.data.result.deepLink.startsWith(`/svc/${SLUG}?at=`));
+
+    // Another tenant's note and an id never issued read the same: not found.
+    assert.equal((await local.asProxy(item(theirs.note.id), token)).status, 404);
+    assert.equal((await local.asProxy(item("never-issued"), token)).status, 404);
+    assert.equal((await local.asProxy(item("x".repeat(201)), token)).status, 400);
+    assert.equal((await local.request(item(mine.note.id))).status, 401);
+    const forged = makeToken({ key: SERVICE_API_KEY, sub: MEMBER, companyId: COMPANY_A });
+    assert.equal((await local.asProxy(item(mine.note.id), forged)).status, 401);
     await local.close();
   });
 

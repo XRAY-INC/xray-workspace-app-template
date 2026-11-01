@@ -79,6 +79,7 @@ test("the public four stay public even when nothing is configured", async () => 
 test("the manifest carries what the workspace's schema requires", () => {
   assert.equal(manifest.contractVersion, "v1");
   assert.equal(manifest.capabilities.search, true);
+  assert.equal(manifest.capabilities.searchLookup, true);
   assert.equal(manifest.capabilities.merge, true);
   assert.match(manifest.service, /^[a-z0-9]{3,32}$/);
   assert.equal(manifest.capabilities.pages, true);
@@ -256,6 +257,28 @@ test("search answers only the signed identity's own to-dos, linking inside the a
   assert.equal((await get(`/api/v1/search?q=c`, signedHeaders(A))).status, 400);
   assert.equal((await get(`/api/v1/search?q=certification&${hint(A)}`)).status, 401);
   assert.equal((await get(`/api/v1/search?q=certification`, tamperedHeaders(A))).status, 401);
+});
+
+test("search lookup answers one of the signed identity's own to-dos by id, 404 for anyone else's", async () => {
+  // A Library pin to a to-do asks for it by id on every read, so a rename
+  // never breaks it. Same gate, same rows, same isolation as search.
+  const aRows = (await (await get(`/api/v1/search?q=certification`, signedHeaders(A))).json())
+    .data.results;
+  const id = aRows[0].id;
+  const item = (value) => `/api/v1/search/items/${encodeURIComponent(value)}`;
+
+  const own = await get(item(id), signedHeaders(A));
+  assert.equal(own.status, 200);
+  const { result } = (await own.json()).data;
+  assert.equal(result.id, id);
+  assert.equal(result.title, "Run certification");
+  assert.equal(result.deepLink, `/svc/${SLUG}/today`);
+
+  assert.equal((await get(item(id), signedHeaders(B))).status, 404, "B never gets A's to-do");
+  assert.equal((await get(item("never-issued"), signedHeaders(A))).status, 404);
+  assert.equal((await get(item("x".repeat(201)), signedHeaders(A))).status, 400);
+  assert.equal((await get(`${item(id)}?${hint(A)}`)).status, 401);
+  assert.equal((await get(item(id), tamperedHeaders(A))).status, 401);
 });
 
 // ── Subject merge: POST /api/v1/subject/merge ────────────────────────────────

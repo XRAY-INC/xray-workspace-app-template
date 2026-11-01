@@ -74,6 +74,7 @@ GET /api/v1/manifest   → 200 {"data":{ …your manifest }}
 | -------------------------------------------- | ------------------------------------------------------------------ |
 | `GET /api/v1/resources`, `/resources/{id}`   | Your records, scoped to the token's identity. Certification probes these. |
 | `GET /api/v1/search?q=&limit=`               | ⌘K search across your records (below).                             |
+| `GET /api/v1/search/items/{id}`              | One of those search results again, by its id (below).              |
 | `POST /api/v1/subject/merge`                 | Fold one person into another when emails are linked (below).       |
 | `GET /api/v1/pages`, `/pages/{id}`           | Server-driven UI: your page list and `PageDocument`s.              |
 | `POST /api/v1/actions/{id}`                  | A block's action (a button, a form). Requires `Idempotency-Key`.   |
@@ -106,6 +107,33 @@ GET /api/v1/search?q=<at least 2 chars>&limit=<1-10>
   results.
 - **Certification probes it** once declared: the shape, a refusal without an
   identity, and that one tenant never finds another's records.
+
+### Search lookup: one result by its id
+
+A member can pin one of your search results into their Library. The pin keeps
+only your result's `id` and asks for it again on every read, so it still finds
+the record after it is renamed. Serve the lookup and declare
+`"capabilities": { "search": true, "searchLookup": true }`; both apps here ship
+it on. Without it, the pin falls back to searching for its old title.
+
+```http
+GET /api/v1/search/items/<encodeURIComponent(id)>
+  X-Workspace-Api-Key: <your service key>
+  X-Workspace-Token:   <identity token, scope "read">
+→ 200 {"data":{"result":{"id":"n1","type":"note","title":"Roadmap for Acme 2027",
+     "deepLink":"/svc/<your-slug>?at=%2Fembed%3Fnote%3Dn1"}}}
+→ 404 when there is no such record OR it is not this identity's · 401 without a valid key and token
+```
+
+- **The same rows as search.** Answer only a record this identity could find
+  there; `result.id` is exactly the id asked for.
+- **Not found and not yours are one answer: 404.** Never 403, so an id never
+  proves a record exists.
+- The id is the same opaque string you put in your search results, sent as
+  one percent-encoded path segment. At most 200 characters (400 otherwise).
+- **Certification probes it** once declared: an unknown id answers 404, one of
+  your own search results comes back by its id, another tenant never gets it,
+  and a caller with no identity is refused.
 
 ### Subject merge: every app joins it
 
@@ -180,7 +208,7 @@ before you register. Two rules JSON Schema cannot express are also enforced:
   "tagline": "Shipments, ETAs & delivery proof",
   "description": "What it does, in one sentence.",
   "requiredTier": "free",
-  "capabilities": { "pages": true, "events": false, "search": true, "merge": true },
+  "capabilities": { "pages": true, "events": false, "search": true, "searchLookup": true, "merge": true },
   "requestedGrants": {
     "identity": { "companyId": false, "tier": false, "tools": false, "access": false },
     "facts": [],

@@ -18,6 +18,7 @@
  *   GET  /api/v1/pages, /api/v1/pages/{id}                   — private, server-driven UI
  *   POST /api/v1/actions/{actionId}                          — private, Idempotency-Key
  *   GET  /api/v1/search?q=&limit=                            — private, ⌘K search
+ *   GET  /api/v1/search/items/:id                            — private, one result by id
  *   POST /api/v1/subject/merge                               — private, scope `merge`
  *
  * ── Identity: signed, or not served at all
@@ -233,7 +234,9 @@ export const manifest = {
   // `merge`: every service can fold one person into another when the
   // workspace links their emails or unifies two accounts.
   // `POST /api/v1/subject/merge` below; certification probes it.
-  capabilities: { pages: true, events: false, search: true, merge: true },
+  // `searchLookup`: one search result again by its id, so a Library pin to a
+  // to-do survives a rename. `GET /api/v1/search/items/:id` below.
+  capabilities: { pages: true, events: false, search: true, searchLookup: true, merge: true },
   requestedGrants: {
     identity: { companyId: false, tier: false, tools: false },
     facts: [],
@@ -440,6 +443,17 @@ export function createApp({ slug = SLUG, embedKey = EMBED_KEY, apiKey = WORKSPAC
       return todo ? ok(res, todo) : fail(res, 404, "NOT_FOUND", "No such record.");
     }
 
+    /** One to-do as a search result, linking inside this app. */
+    const searchResult = (todo, score) => ({
+      id: todo.id,
+      service: slug,
+      type: "todo",
+      title: todo.title,
+      snippet: todo.done ? "Done" : "To do",
+      deepLink: `/svc/${slug}/today`,
+      score,
+    });
+
     // Search, for the workspace's ⌘K: this identity's own
     // to-dos and nothing else — the same rows `/api/v1/resources` serves. `q`
     // and `limit` only; who is asking is the signed token's answer. Results
@@ -454,16 +468,26 @@ export function createApp({ slug = SLUG, embedKey = EMBED_KEY, apiKey = WORKSPAC
       const results = [...listFor(email).values()]
         .filter((todo) => words.every((word) => todo.title.toLowerCase().includes(word)))
         .slice(0, limit)
-        .map((todo) => ({
-          id: todo.id,
-          service: slug,
-          type: "todo",
-          title: todo.title,
-          snippet: todo.done ? "Done" : "To do",
-          deepLink: `/svc/${slug}/today`,
-          score: todo.title.toLowerCase().startsWith(q) ? 0.9 : 0.6,
-        }));
+        .map((todo) => searchResult(todo, todo.title.toLowerCase().startsWith(q) ? 0.9 : 0.6));
       return ok(res, { results });
+    }
+
+    // Search lookup: one of this identity's search results again, by its id,
+    // so a Library pin to a to-do survives a rename. Another identity's id is
+    // simply not found, exactly like `/api/v1/resources/:id` (never 403).
+    const lookup = path.match(/^\/api\/v1\/search\/items\/([^/]+)$/);
+    if (method === "GET" && lookup) {
+      let id;
+      try {
+        id = decodeURIComponent(lookup[1]);
+      } catch {
+        return fail(res, 400, "VALIDATION_ERROR", "The id is not a valid path segment.");
+      }
+      if (!id || id.length > 200) {
+        return fail(res, 400, "VALIDATION_ERROR", "id must be 1 to 200 characters.");
+      }
+      const todo = listFor(email).get(id);
+      return todo ? ok(res, { result: searchResult(todo, 1) }) : fail(res, 404, "NOT_FOUND", "No such record.");
     }
 
     // Subject merge: the workspace folds one person into another. The same

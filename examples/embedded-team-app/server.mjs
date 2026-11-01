@@ -252,6 +252,9 @@ export function buildManifest(config) {
       // Every service serves search, so the workspace's ⌘K finds its records.
       // `GET /api/v1/search` below; certification probes it.
       search: true,
+      // ...and finds one of those results again by its id, so a Library pin
+      // to a note survives a rename. `GET /api/v1/search/items/:id` below.
+      searchLookup: true,
       // Every service can fold one person into another when the workspace
       // links their emails or unifies two accounts.
       // `POST /api/v1/subject/merge` below; certification probes it.
@@ -830,6 +833,19 @@ export function createApp(options) {
         return ok(res, { items: own.map(noteView) });
       }
 
+      /** One note as a search result, linking INSIDE this app (`/svc/<slug>?at=`). */
+      function searchResult(note, score) {
+        return {
+          id: note.id,
+          service: config.slug,
+          type: "note",
+          title: note.title,
+          snippet: note.dept ? `Team note · ${note.dept}` : "Team note",
+          deepLink: `/svc/${config.slug}?at=${encodeURIComponent(`/embed?note=${note.id}`)}`,
+          score,
+        };
+      }
+
       // ── search: the workspace's ⌘K asks every app ──────────────────────
       // The same gate as the resources (service
       // key AND signed token), and the same rows: what this person can read
@@ -859,16 +875,40 @@ export function createApp(options) {
           .listOwn(who.companyId, who.email)
           .filter((note) => words.every((word) => note.title.toLowerCase().includes(word)))
           .slice(0, limit)
-          .map((note) => ({
-            id: note.id,
-            service: config.slug,
-            type: "note",
-            title: note.title,
-            snippet: note.dept ? `Team note · ${note.dept}` : "Team note",
-            deepLink: `/svc/${config.slug}?at=${encodeURIComponent(`/embed?note=${note.id}`)}`,
-            score: note.title.toLowerCase().startsWith(q) ? 0.9 : 0.6,
-          }));
+          .map((note) => searchResult(note, note.title.toLowerCase().startsWith(q) ? 0.9 : 0.6));
         return ok(res, { results });
+      }
+
+      // ── search lookup: one of those results again, by its id ───────────
+      // A Library pin to a note stores its id and asks for it on every read,
+      // so a renamed note is still found. The same gate and the same rows as
+      // search: a note this person could not find there is "not found" here,
+      // whether or not it exists (never 403, so an id proves nothing).
+      const lookup = path.match(/^\/api\/v1\/search\/items\/([^/]+)$/);
+      if (method === "GET" && lookup) {
+        const who = resolveResourceIdentity(req, url);
+        if (who.code) {
+          return fail(
+            res,
+            who.status,
+            who.code,
+            who.code === "IDENTITY_MISMATCH"
+              ? "The requested identity does not match the signed token."
+              : "This endpoint needs the service key and a signed identity token.",
+          );
+        }
+        let id;
+        try {
+          id = decodeURIComponent(lookup[1]);
+        } catch {
+          return fail(res, 400, "VALIDATION_ERROR", "The id is not a valid path segment.");
+        }
+        if (!id || id.length > 200) {
+          return fail(res, 400, "VALIDATION_ERROR", "id must be 1 to 200 characters.");
+        }
+        const note = store.listOwn(who.companyId, who.email).find((own) => own.id === id);
+        if (!note) return fail(res, 404, "NOT_FOUND", "No such note.");
+        return ok(res, { result: searchResult(note, 1) });
       }
 
       // ── subject merge: the workspace folds one person into another ───────
