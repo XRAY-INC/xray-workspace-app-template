@@ -18,6 +18,7 @@
  *   GET  /api/v1/pages, /api/v1/pages/{id}                   — private, server-driven UI
  *   POST /api/v1/actions/{actionId}                          — private, Idempotency-Key
  *   GET  /api/v1/search?q=&limit=                            — private, ⌘K search
+ *   GET  /api/v1/related?ref=<slug>:<id>                     — private, related items
  *   POST /api/v1/subject/merge                               — private, scope `merge`
  *
  * ── Identity: signed, or not served at all
@@ -233,7 +234,9 @@ export const manifest = {
   // `merge`: every service can fold one person into another when the
   // workspace links their emails or unifies two accounts.
   // `POST /api/v1/subject/merge` below; certification probes it.
-  capabilities: { pages: true, events: false, search: true, merge: true },
+  // `related`: what relates to one to-do, as references the workspace
+  // re-finds by id as the viewer. `GET /api/v1/related` below.
+  capabilities: { pages: true, events: false, search: true, related: true, merge: true },
   requestedGrants: {
     identity: { companyId: false, tier: false, tools: false },
     facts: [],
@@ -464,6 +467,29 @@ export function createApp({ slug = SLUG, embedKey = EMBED_KEY, apiKey = WORKSPAC
           score: todo.title.toLowerCase().startsWith(q) ? 0.9 : 0.6,
         }));
       return ok(res, { results });
+    }
+
+    // Related items (MICROSERVICE-API-SPEC §6.7): what relates to one of this
+    // identity's to-dos — the others still open, then the done ones — as
+    // references only (no title, no link): the workspace re-finds each by id
+    // as the viewer. Another identity's to-do is simply not found (404).
+    if (method === "GET" && path === "/api/v1/related") {
+      const ref = (url.searchParams.get("ref") ?? "").trim();
+      const prefix = `${slug}:`;
+      if (!ref.startsWith(prefix) || ref.length === prefix.length || ref.length > 241) {
+        return fail(res, 400, "VALIDATION_ERROR", `ref must be ${prefix}<id>.`);
+      }
+      const todos = listFor(email);
+      const todo = todos.get(ref.slice(prefix.length));
+      if (!todo) return fail(res, 404, "NOT_FOUND", "No such record.");
+      const others = [...todos.values()].filter((other) => other.id !== todo.id);
+      const related = [
+        ...others.filter((other) => !other.done).map((other) => ({ other, reason: "Still to do" })),
+        ...others.filter((other) => other.done).map((other) => ({ other, reason: "Done" })),
+      ]
+        .slice(0, 10)
+        .map(({ other, reason }) => ({ service: slug, id: other.id, reason }));
+      return ok(res, { related });
     }
 
     // Subject merge: the workspace folds one person into another. The same

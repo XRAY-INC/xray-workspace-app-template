@@ -74,6 +74,7 @@ GET /api/v1/manifest   → 200 {"data":{ …your manifest }}
 | -------------------------------------------- | ------------------------------------------------------------------ |
 | `GET /api/v1/resources`, `/resources/{id}`   | Your records, scoped to the token's identity. Certification probes these. |
 | `GET /api/v1/search?q=&limit=`               | ⌘K search across your records (below).                             |
+| `GET /api/v1/related?ref=<slug>:<id>`        | What relates to one of your records, as references (below).        |
 | `POST /api/v1/subject/merge`                 | Fold one person into another when emails are linked (below).       |
 | `GET /api/v1/pages`, `/pages/{id}`           | Server-driven UI: your page list and `PageDocument`s.              |
 | `POST /api/v1/actions/{id}`                  | A block's action (a button, a form). Requires `Idempotency-Key`.   |
@@ -106,6 +107,33 @@ GET /api/v1/search?q=<at least 2 chars>&limit=<1-10>
   results.
 - **Certification probes it** once declared: the shape, a refusal without an
   identity, and that one tenant never finds another's records.
+
+### Related items: what relates to one record
+
+Wherever a record opens in the workspace, a "Related" section shows a few
+other things worth opening. Your app can say what relates to one of its
+records: serve this and declare `"related": true` beside `"search": true`.
+
+```http
+GET /api/v1/related?ref=<your-slug>:<record id>
+  X-Workspace-Api-Key: <your service key>
+  X-Workspace-Token:   <identity token, scope "read">
+→ 200 {"data":{"related":[
+    {"service":"<your-slug>","id":"n2","reason":"Same team · Sales"}
+  ]}}
+→ 404 for a record that is not there OR not this identity's · 400 for a bad ref · 401 without a valid key and token
+```
+
+- **References only.** A row is a `service` (a workspace search source: your
+  slug, or another one such as `library`), an `id` and an optional `reason`
+  (at most 120 characters). No title, no link: the workspace re-finds every
+  reference by id **as the viewer** and shows only what they can open, so a
+  reference to one of your own records needs the by-id search lookup too.
+- At most 10 rows, best first. An empty list is a fine answer.
+- **Not found and not yours are one answer, 404**, so the endpoint never
+  says whether someone else's record exists.
+- **Certification probes it** once declared: the shape, a refusal without an
+  identity, and that one tenant is never told what relates to another's record.
 
 ### Subject merge: every app joins it
 
@@ -180,7 +208,7 @@ before you register. Two rules JSON Schema cannot express are also enforced:
   "tagline": "Shipments, ETAs & delivery proof",
   "description": "What it does, in one sentence.",
   "requiredTier": "free",
-  "capabilities": { "pages": true, "events": false, "search": true, "merge": true },
+  "capabilities": { "pages": true, "events": false, "search": true, "related": true, "merge": true },
   "requestedGrants": {
     "identity": { "companyId": false, "tier": false, "tools": false, "access": false },
     "facts": [],
@@ -336,6 +364,9 @@ What the harness checks, and where the reference apps' tests cover it:
 | `tampered_token_denied`  | a bad signature is refused, even with a matching email hint           |
 | `hint_not_authoritative` | a hint that disagrees with the token is refused                       |
 | `embed_frame_ancestors`  | the embed page's CSP names the workspace in `frame-ancestors`         |
+| `related_contract`       | a declared `related` answers references for A's record, 404s unknowns |
+| `related_isolation`      | B is never told what relates to A's record (a leak suspends)          |
+| `related_denied`         | no identity is refused                                                |
 
 The harness probes your **real** handlers with identities indistinguishable
 from real users. Don't build a probe-only code path: a service that behaves for

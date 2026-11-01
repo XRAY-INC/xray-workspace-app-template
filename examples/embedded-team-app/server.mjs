@@ -252,6 +252,10 @@ export function buildManifest(config) {
       // Every service serves search, so the workspace's ⌘K finds its records.
       // `GET /api/v1/search` below; certification probes it.
       search: true,
+      // What relates to one of this person's notes, as references the
+      // workspace re-finds by id as the viewer before showing them.
+      // `GET /api/v1/related` below; certification probes it.
+      related: true,
       // Every service can fold one person into another when the workspace
       // links their emails or unifies two accounts.
       // `POST /api/v1/subject/merge` below; certification probes it.
@@ -869,6 +873,47 @@ export function createApp(options) {
             score: note.title.toLowerCase().startsWith(q) ? 0.9 : 0.6,
           }));
         return ok(res, { results });
+      }
+
+      // ── related: what relates to one note (MICROSERVICE-API-SPEC §6.7) ──
+      // The same gate as search. `ref` is `<slug>:<note id>`; only the
+      // caller's own note answers, anything else is 404 (not found and not
+      // yours are one answer). The answer is REFERENCES only — the
+      // workspace re-finds each by id as the viewer before showing it — so
+      // nothing here carries a title or a link: the person's other notes for
+      // the same team, then their latest notes.
+      if (method === "GET" && path === "/api/v1/related") {
+        const who = resolveResourceIdentity(req, url);
+        if (who.code) {
+          return fail(
+            res,
+            who.status,
+            who.code,
+            who.code === "IDENTITY_MISMATCH"
+              ? "The requested identity does not match the signed token."
+              : "This endpoint needs the service key and a signed identity token.",
+          );
+        }
+        const ref = (url.searchParams.get("ref") ?? "").trim();
+        const prefix = `${config.slug}:`;
+        if (!ref.startsWith(prefix) || ref.length === prefix.length || ref.length > 241) {
+          return fail(res, 400, "VALIDATION_ERROR", `ref must be ${prefix}<id>.`);
+        }
+        const id = ref.slice(prefix.length);
+        const own = store.listOwn(who.companyId, who.email);
+        const note = own.find((candidate) => candidate.id === id);
+        if (!note) return fail(res, 404, "NOT_FOUND", "No such record.");
+        const others = own.filter((candidate) => candidate.id !== note.id);
+        const sameTeam = note.dept ? others.filter((candidate) => candidate.dept === note.dept) : [];
+        const related = [
+          ...sameTeam.map((candidate) => ({ candidate, reason: `Same team · ${note.dept}` })),
+          ...others
+            .filter((candidate) => !sameTeam.includes(candidate))
+            .map((candidate) => ({ candidate, reason: "Another of your notes" })),
+        ]
+          .slice(0, 10)
+          .map(({ candidate, reason }) => ({ service: config.slug, id: candidate.id, reason }));
+        return ok(res, { related });
       }
 
       // ── subject merge: the workspace folds one person into another ───────

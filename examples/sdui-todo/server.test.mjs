@@ -79,6 +79,7 @@ test("the public four stay public even when nothing is configured", async () => 
 test("the manifest carries what the workspace's schema requires", () => {
   assert.equal(manifest.contractVersion, "v1");
   assert.equal(manifest.capabilities.search, true);
+  assert.equal(manifest.capabilities.related, true);
   assert.equal(manifest.capabilities.merge, true);
   assert.match(manifest.service, /^[a-z0-9]{3,32}$/);
   assert.equal(manifest.capabilities.pages, true);
@@ -256,6 +257,29 @@ test("search answers only the signed identity's own to-dos, linking inside the a
   assert.equal((await get(`/api/v1/search?q=c`, signedHeaders(A))).status, 400);
   assert.equal((await get(`/api/v1/search?q=certification&${hint(A)}`)).status, 401);
   assert.equal((await get(`/api/v1/search?q=certification`, tamperedHeaders(A))).status, 401);
+});
+
+test("related answers references for the signed identity's own to-do only", async () => {
+  // MICROSERVICE-API-SPEC §6.7: references only, the caller's own item, 404
+  // for anyone else's — the workspace re-finds each one before showing it.
+  const items = (await (await get("/api/v1/resources", signedHeaders(A))).json()).data.items;
+  const [first] = items;
+  const ref = encodeURIComponent(`${SLUG}:${first.id}`);
+
+  const own = await get(`/api/v1/related?ref=${ref}`, signedHeaders(A));
+  assert.equal(own.status, 200);
+  const related = (await own.json()).data.related;
+  assert.ok(related.length > 0 && related.length <= 10);
+  for (const row of related) {
+    assert.deepEqual(Object.keys(row).sort(), ["id", "reason", "service"]);
+    assert.equal(row.service, SLUG);
+    assert.notEqual(row.id, first.id);
+  }
+
+  assert.equal((await get(`/api/v1/related?ref=${ref}`, signedHeaders(B))).status, 404);
+  assert.equal((await get(`/api/v1/related?ref=${ref}&${hint(A)}`)).status, 401);
+  assert.equal((await get(`/api/v1/related?ref=other:${first.id}`, signedHeaders(A))).status, 400);
+  assert.equal((await get(`/api/v1/related?ref=${SLUG}:nope`, signedHeaders(A))).status, 404);
 });
 
 // ── Subject merge: POST /api/v1/subject/merge ────────────────────────────────

@@ -62,7 +62,10 @@
       "default": {
         "pages": false,
         "events": false,
-        "search": false
+        "search": false,
+        "searchLookup": false,
+        "related": false,
+        "merge": false
       },
       "type": "object",
       "properties": {
@@ -103,6 +106,18 @@
           ]
         },
         "search": {
+          "default": false,
+          "type": "boolean"
+        },
+        "searchLookup": {
+          "default": false,
+          "type": "boolean"
+        },
+        "related": {
+          "default": false,
+          "type": "boolean"
+        },
+        "merge": {
           "default": false,
           "type": "boolean"
         }

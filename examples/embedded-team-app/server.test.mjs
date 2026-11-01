@@ -166,6 +166,38 @@ describe("the registered-service contract", () => {
     await local.close();
   });
 
+  test("related answers references for the signed person's own note only", async () => {
+    // MICROSERVICE-API-SPEC §6.7: references only (the workspace re-finds
+    // each by id as the viewer), the same team's notes first, 404 for
+    // another person's or another tenant's note.
+    const store = createStore();
+    const mine = store.add({ companyId: COMPANY_A, ownerEmail: MEMBER, title: "Plan", dept: "ops" });
+    const team = store.add({ companyId: COMPANY_A, ownerEmail: MEMBER, title: "Ops log", dept: "ops" });
+    const other = store.add({ companyId: COMPANY_A, ownerEmail: MEMBER, title: "Misc" });
+    const elsewhere = store.add({ companyId: COMPANY_B, ownerEmail: MEMBER, title: "Globex" });
+    const local = await startApp({ store });
+    const token = makeToken({ sub: MEMBER, companyId: COMPANY_A });
+    const ask = (id, as = token) =>
+      local.asProxy(`/api/v1/related?ref=${encodeURIComponent(`${SLUG}:${id}`)}`, as);
+
+    const found = await ask(mine.note.id);
+    assert.equal(found.status, 200);
+    assert.deepEqual(
+      found.body.data.related.map((row) => row.id),
+      [team.note.id, other.note.id],
+    );
+    for (const row of found.body.data.related) {
+      assert.deepEqual(Object.keys(row).sort(), ["id", "reason", "service"]);
+    }
+
+    assert.equal((await ask(elsewhere.note.id)).status, 404);
+    const peer = makeToken({ sub: "someone.else@example.com", companyId: COMPANY_A });
+    assert.equal((await ask(mine.note.id, peer)).status, 404);
+    assert.equal((await local.request(`/api/v1/related?ref=${SLUG}:${mine.note.id}`)).status, 401);
+    assert.equal((await local.asProxy("/api/v1/related?ref=other:x", token)).status, 400);
+    await local.close();
+  });
+
   test("pages need the service key, and carry no user data when they get it", async () => {
     assert.equal((await app.request("/api/v1/pages")).status, 401);
     const withKey = await app.request("/api/v1/pages", {
