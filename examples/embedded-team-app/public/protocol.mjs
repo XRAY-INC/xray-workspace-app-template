@@ -15,6 +15,7 @@ export const EMBED_MESSAGE = Object.freeze({
   ready: "xray:embed:ready",
   token: "xray:embed:token",
   theme: "xray:embed:theme",
+  navigate: "xray:embed:navigate",
 });
 
 /** A JWT bigger than this is not one of ours; refuse before touching it. */
@@ -26,6 +27,29 @@ const JWT_SHAPE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 /** The message we send UP to announce we are loaded and want a token. */
 export function readyMessage() {
   return { type: EMBED_MESSAGE.ready };
+}
+
+/**
+ * The message we send UP whenever we show a different page, so the
+ * workspace's address bar follows us: it writes `path` into its own URL as
+ * `/svc/<slug>?at=<path>` (a link that reopens this page, and one analytics
+ * page view per page). Optional; without it the workspace URL stays
+ * `/svc/<slug>`.
+ *
+ * `path` is our path and query only — never an origin, and never a
+ * `#fragment`. Our own `theme` (the workspace set it on the frame URL) is
+ * left out, so one page is one link. Never report a path that carries a
+ * token or a sign-in code: the workspace drops credential-shaped parameters
+ * too, but the rule is yours first.
+ *
+ * @param {string} pathname `location.pathname`
+ * @param {string} [search] `location.search`
+ */
+export function navigateMessage(pathname, search = "") {
+  const params = new URLSearchParams(search);
+  params.delete("theme");
+  const query = params.toString();
+  return { type: EMBED_MESSAGE.navigate, path: `${pathname}${query ? `?${query}` : ""}` };
 }
 
 function deny(reason) {

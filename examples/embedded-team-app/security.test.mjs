@@ -15,6 +15,7 @@ import {
   THEME_TOKEN_NAMES,
   acceptThemeMessage,
   acceptTokenMessage,
+  navigateMessage,
   readyMessage,
   themeFromSearch,
   EMBED_MESSAGE,
@@ -155,6 +156,21 @@ describe("the theme handoff (protocol v1) is validated as strictly as the token"
     for (const search of ["", "?theme=", "?theme=Dark", "?theme=blue", "?theme=%3Cscript%3E"]) {
       assert.equal(themeFromSearch(search), null, search);
     }
+  });
+});
+
+describe("the page we report up carries our path and query only", () => {
+  test("the path and query, never an origin or a fragment", () => {
+    assert.deepEqual(navigateMessage("/embed", "?note=n1"), {
+      type: EMBED_MESSAGE.navigate,
+      path: "/embed?note=n1",
+    });
+    assert.deepEqual(navigateMessage("/embed"), { type: EMBED_MESSAGE.navigate, path: "/embed" });
+  });
+
+  test("leaves out the theme the workspace put on our frame URL", () => {
+    assert.equal(navigateMessage("/embed", "?theme=dark").path, "/embed");
+    assert.equal(navigateMessage("/embed", "?note=n1&theme=light").path, "/embed?note=n1");
   });
 });
 

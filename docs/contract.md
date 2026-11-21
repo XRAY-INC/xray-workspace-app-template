@@ -318,6 +318,39 @@ properties through the CSSOM, never as CSS text. The exact vocabulary and
 patterns are in [`contract/workspace-v1.json`](../contract/workspace-v1.json),
 with real messages for both modes.
 
+### Deep links: the workspace URL follows your page
+
+Inside the frame, your navigation does not change the workspace's address bar,
+so a copied link and every analytics page view would only ever say
+`/svc/<your-slug>`. Tell the workspace which page you show, after each route
+change:
+
+```json
+{ "type": "xray:embed:navigate", "path": "/notes/42?tab=history" }
+```
+
+posted to `window.parent`, targeted at the workspace origin (never `"*"`). The
+workspace writes `path` into its own URL as `/svc/<your-slug>?at=<path>`,
+replacing the current history entry (so Back still leaves your app), which
+makes the address bar a link that reopens your frame at that page and gives
+analytics one page view per page.
+
+- `path` is your path and query on your own origin: it starts with `/`, is at
+  most 512 characters, and has no origin, no `//host`, no backslash and no
+  whitespace or control character. Anything else is ignored.
+- **Never report a token or a sign-in code.** The workspace drops the
+  `#fragment` and any credential-shaped query parameter (`token`, `code`,
+  `state`, `key`, `session`, anything containing `token`, `secret`,
+  `password` or `signature`…) before it writes the URL, but the rule is
+  yours first. Leave out the `theme` the workspace put on your frame URL.
+- Your default page (your manifest `capabilities.embed.path`) keeps the plain
+  `/svc/<your-slug>`.
+- The workspace accepts it from your exact origin and your frame's window
+  only, like every message on this bridge, and never re-opens your frame
+  because of it.
+- Optional. Without it, everything works as before; the URL just stays
+  `/svc/<your-slug>`.
+
 ---
 
 ## Certification
