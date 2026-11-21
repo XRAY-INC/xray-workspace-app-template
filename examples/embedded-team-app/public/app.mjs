@@ -22,6 +22,7 @@ import {
   EMBED_MESSAGE,
   acceptThemeMessage,
   acceptTokenMessage,
+  navigateMessage,
   readyMessage,
 } from "./protocol.mjs";
 
@@ -111,6 +112,20 @@ function announce() {
     if (identityToken) return;
     giveUp("no token arrived within the handshake window");
   }, HANDSHAKE_TIMEOUT_MS);
+}
+
+/**
+ * Tell the workspace which page we are on, so its address bar is a link to
+ * it (`/svc/<slug>?at=<path>`). This app has one page, so it reports once; an
+ * app with a router calls this after every route change. Targeted at the
+ * configured origin, like every message we send.
+ */
+function reportPage() {
+  if (window.parent === window || !workspaceOrigin) return;
+  window.parent.postMessage(
+    navigateMessage(window.location.pathname, window.location.search),
+    workspaceOrigin,
+  );
 }
 
 // ── the theme ───────────────────────────────────────────────────────────────
@@ -375,3 +390,4 @@ async function removeNote(id) {
 }
 
 announce();
+reportPage();

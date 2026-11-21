@@ -48,7 +48,8 @@
     "messages": {
       "ready": "xray:embed:ready",
       "token": "xray:embed:token",
-      "theme": "xray:embed:theme"
+      "theme": "xray:embed:theme",
+      "navigate": "xray:embed:navigate"
     },
     "theme": {
       "version": 1,

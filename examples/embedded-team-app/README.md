@@ -116,6 +116,17 @@ feeds the theme messages the workspace's real stylesheet produces through
 `acceptThemeMessage`. The contract is in
 [`docs/contract.md`](../../docs/contract.md#theme-handoff-v1).
 
+#### Deep links: the workspace URL follows your page
+
+`reportPage` (`public/app.mjs`) posts `navigateMessage(location.pathname,
+location.search)` — `{"type":"xray:embed:navigate","path":"/embed?note=n1"}` —
+to the workspace origin, and the workspace writes that path into its own
+address bar as `/svc/<slug>?at=<path>`. This app has one page, so it reports
+once; an app with a router calls it after every route change. The path is
+your path and query only, without the workspace's `theme`, and never a token.
+The contract is in
+[`docs/contract.md`](../../docs/contract.md#deep-links-the-workspace-url-follows-your-page).
+
 ### 2. Identity-token verification — [`identity-token.mjs`](./identity-token.mjs)
 
 Mirrors the workspace's own verifier, and `contract.test.mjs` runs it against
